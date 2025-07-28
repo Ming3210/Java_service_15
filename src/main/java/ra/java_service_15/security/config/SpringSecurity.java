@@ -17,15 +17,19 @@ import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import ra.java_service_15.security.jwt.JWTAuthFilter;
 
 @Configuration
 @EnableWebSecurity
-@EnableMethodSecurity (securedEnabled = true)
+@EnableMethodSecurity(securedEnabled = true)
 public class SpringSecurity {
     @Autowired
     private PasswordEncoder passwordEncoder;
     @Autowired
     private UserDetailsService userDetailsService;
+    @Autowired
+    private JWTAuthFilter jwtAuthFilter;
 
     @Bean
     public AuthenticationEntryPoint authenticationEntryPoint(){
@@ -44,19 +48,50 @@ public class SpringSecurity {
         daoAuthenticationProvider.setPasswordEncoder(passwordEncoder);
         return daoAuthenticationProvider;
     }
+
     @Bean
-    public SecurityFilterChain configuration(HttpSecurity http) throws Exception {
+    public SecurityFilterChain configuration(HttpSecurity http, JWTAuthFilter jWTAuthFilter) throws Exception {
         http.csrf(csrf -> csrf.disable())
                 .authorizeHttpRequests(authorizeRequests -> authorizeRequests
+                        // Authentication endpoints - Public
                         .requestMatchers("/api/v1/auth/**").permitAll()
-                        .requestMatchers(HttpMethod.POST,"/api/v1/product").hasRole("ADMIN")
-                        .requestMatchers(HttpMethod.GET,"/api/v1/product").hasAnyRole("ADMIN","USER")
-                        .requestMatchers("/api/v1/user/**").hasAnyRole("ADMIN","USER")
-                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
-                        .requestMatchers("/api/v1/moderator/**").hasAnyRole("ADMIN","MODERATOR")
-                        .requestMatchers("/login").permitAll()
+                        .requestMatchers("/api/v1/login").permitAll()
                         .requestMatchers("/register").permitAll()
-                        .anyRequest().authenticated()).sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
-                return http.build();
+
+                        // Product endpoints
+                        .requestMatchers(HttpMethod.GET, "/api/v1/products").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/products").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.PUT, "/api/v1/products").hasAnyRole("ADMIN", "USER")
+                        .requestMatchers(HttpMethod.DELETE, "/api/v1/products").hasAnyRole("ADMIN", "USER")
+
+                        // Order endpoints
+                        .requestMatchers(HttpMethod.POST, "/api/orders").hasRole("CUSTOMER")
+                        .requestMatchers(HttpMethod.GET, "/api/orders/my").hasRole("CUSTOMER")
+                        .requestMatchers(HttpMethod.GET, "/api/orders").hasAnyRole("STAFF", "ADMIN")
+
+                        // User management endpoints
+                        .requestMatchers(HttpMethod.GET, "/api/users/me").authenticated() // Tất cả user đã đăng nhập
+                        .requestMatchers(HttpMethod.PUT, "/api/users/*/role").hasRole("ADMIN") // Chỉ ADMIN
+
+                        // Review endpoints - Đánh giá sản phẩm
+                        .requestMatchers(HttpMethod.POST, "/api/reviews").hasRole("CUSTOMER")
+                        .requestMatchers(HttpMethod.GET, "/api/reviews/products/*").permitAll() // Xem review public
+                        .requestMatchers(HttpMethod.GET, "/api/reviews/check-purchase/*").hasRole("CUSTOMER")
+
+                        // Report endpoints - Báo cáo doanh thu (chỉ ADMIN)
+                        .requestMatchers("/api/reports/**").hasRole("ADMIN")
+
+                        // Role-based endpoints - General
+                        .requestMatchers("/api/v1/user/**").hasAnyRole("ADMIN", "USER", "CUSTOMER")
+                        .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
+                        .requestMatchers("/api/v1/moderator/**").hasAnyRole("ADMIN", "MODERATOR")
+
+                        // Default: require authentication
+                        .anyRequest().authenticated())
+                .exceptionHandling(ex -> ex.authenticationEntryPoint(authenticationEntryPoint()))
+                .authenticationProvider(authenticationProvider())
+                .addFilterBefore(jWTAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS));
+        return http.build();
     }
 }
